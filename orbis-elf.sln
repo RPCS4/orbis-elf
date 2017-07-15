@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 15
+VisualStudioVersion = 15.0.26711.1
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "liborbis-elf", "liborbis-elf\liborbis-elf.vcxproj", "{B054BA34-818D-4BF1-8F94-1DEE537439A5}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "orbis-elf", "orbis-elf\orbis-elf.vcxproj", "{1CDD9943-9517-403C-A447-0756D413065D}"
+	ProjectSection(ProjectDependencies) = postProject
+		{B054BA34-818D-4BF1-8F94-1DEE537439A5} = {B054BA34-818D-4BF1-8F94-1DEE537439A5}
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B054BA34-818D-4BF1-8F94-1DEE537439A5}.Debug|x64.ActiveCfg = Debug|x64
+		{B054BA34-818D-4BF1-8F94-1DEE537439A5}.Debug|x64.Build.0 = Debug|x64
+		{B054BA34-818D-4BF1-8F94-1DEE537439A5}.Release|x64.ActiveCfg = Release|x64
+		{B054BA34-818D-4BF1-8F94-1DEE537439A5}.Release|x64.Build.0 = Release|x64
+		{1CDD9943-9517-403C-A447-0756D413065D}.Debug|x64.ActiveCfg = Debug|x64
+		{1CDD9943-9517-403C-A447-0756D413065D}.Debug|x64.Build.0 = Debug|x64
+		{1CDD9943-9517-403C-A447-0756D413065D}.Release|x64.ActiveCfg = Release|x64
+		{1CDD9943-9517-403C-A447-0756D413065D}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {57E80DB4-3266-4902-937B-09BE11A0CA8B}
+	EndGlobalSection
+EndGlobal

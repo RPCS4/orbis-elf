@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="include">
+      <UniqueIdentifier>{f9bb9ae0-c301-4f11-a877-37604cb9aae8}</UniqueIdentifier>
+      <Extensions>h</Extensions>
+    </Filter>
+    <Filter Include="source">
+      <UniqueIdentifier>{5139f01a-418a-43a6-8bb1-f7154118ad9a}</UniqueIdentifier>
+      <Extensions>cpp</Extensions>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\orbis-elf-types.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\orbis-elf-api.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\orbis-elf-enums.h">
+      <Filter>include</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="source\orbis-elf-api.c">
+      <Filter>source</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
