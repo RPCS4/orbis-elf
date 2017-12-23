@@ -1,7 +1,7 @@
 #ifndef _ORBIS_ELF_ENUMS_H_
 #define _ORBIS_ELF_ENUMS_H_
 
-typedef enum
+typedef enum OrbisElfErrorCode_t
 {
 	orbisElfErrorCodeOk,
 	orbisElfErrorCodeNoMemory,
@@ -10,7 +10,7 @@ typedef enum
 	orbisElfErrorCodeNotFound,
 } OrbisElfErrorCode_t;
 
-typedef enum 
+typedef enum OrbisElfType_t
 {
 	orbisElfTypeNone = 0,
 	orbisElfTypeRel = 1,
@@ -22,7 +22,7 @@ typedef enum
 	orbisElfTypeSceDynamic = 0xfe18
 } OrbisElfType_t;
 
-typedef enum
+typedef enum OrbisElfProgramType_t
 {
 	orbisElfProgramTypeNull = 0,
 	orbisElfProgramTypeLoad = 1,
@@ -39,7 +39,7 @@ typedef enum
 	orbisElfProgramTypeSceVersion = 0x6fffff01,
 } OrbisElfProgramType_t;
 
-typedef enum
+typedef enum OrbisElfSectionType_t
 {
 	orbisElfSectionTypeNull = 0,
 	orbisElfSectionTypeProgBits = 1,
@@ -55,7 +55,7 @@ typedef enum
 	orbisElfSectionTypeDynSym = 11,
 } OrbisElfSectionType_t;
 
-typedef enum
+typedef enum OrbisElfDynamicType_t
 {
 	orbisElfDynamicTypeNull = 0,
 	orbisElfDynamicTypeNeeded = 1,
@@ -115,7 +115,7 @@ typedef enum
 	orbisElfDynamicTypeSceSymTabSize = 0x6100003f,
 } OrbisElfDynamicType_t;
 
-typedef enum
+typedef enum OrbisElfSymbolType_t
 {
 	orbisElfSymbolTypeNoType = 0,
 	orbisElfSymbolTypeObject = 1,
@@ -126,11 +126,60 @@ typedef enum
 	orbisElfSymbolTypeTls = 6
 } OrbisElfSymbolType_t;
 
-typedef enum
+typedef enum OrbisElfSymbolBind_t
 {
 	orbisElfSymbolBindLocal = 0,
 	orbisElfSymbolBindGlobal = 1,
 	orbisElfSymbolBindWeak = 2
 } OrbisElfSymbolBind_t;
+
+typedef enum OrbisElfImportInjectType_t
+{
+	orbisElfImportInjectTypeSet,
+	orbisElfImportInjectTypeAdd
+} OrbisElfImportInjectType_t;
+
+typedef enum OrbisElfRelocationType_t
+{
+	orbisElfRelocationTypeNone,
+	orbisElfRelocationType64,
+	orbisElfRelocationTypePc32,
+	orbisElfRelocationTypeGot32,
+	orbisElfRelocationTypePlt32,
+	orbisElfRelocationTypeCopy,
+	orbisElfRelocationTypeGlobDat,
+	orbisElfRelocationTypeJumpSlot,
+	orbisElfRelocationTypeRelative,
+	orbisElfRelocationTypeGotPcRel,
+	orbisElfRelocationType32,
+	orbisElfRelocationType32s,
+	orbisElfRelocationType16,
+	orbisElfRelocationTypePc16,
+	orbisElfRelocationType8,
+	orbisElfRelocationTypePc8,
+	orbisElfRelocationTypeDtpMod64,
+	orbisElfRelocationTypeDtpOff64,
+	orbisElfRelocationTypeTpOff64,
+	orbisElfRelocationTypeTlsGd,
+	orbisElfRelocationTypeTlsLd,
+	orbisElfRelocationTypeDtpOff32,
+	orbisElfRelocationTypeGotTpOff,
+	orbisElfRelocationTypeTpOff32,
+	orbisElfRelocationTypePc64,
+	orbisElfRelocationTypeGotOff64,
+	orbisElfRelocationTypeGotPc32,
+	orbisElfRelocationTypeGot64,
+	orbisElfRelocationTypeGotPcRel64,
+	orbisElfRelocationTypeGotPc64,
+	orbisElfRelocationTypeGotPlt64,
+	orbisElfRelocationTypePltOff64,
+	orbisElfRelocationTypeSize32,
+	orbisElfRelocationTypeSize64,
+	orbisElfRelocationTypeGotPc32TlsDesc,
+	orbisElfRelocationTypeTlsDescCall,
+	orbisElfRelocationTypeTlsDesc,
+	orbisElfRelocationTypeIRelative,
+	orbisElfRelocationTypeRelative64
+} OrbisElfRelocationType_t;
 
 #endif /* _ORBIS_ELF_ENUMS_H_ */

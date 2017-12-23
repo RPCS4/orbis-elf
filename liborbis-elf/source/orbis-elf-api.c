@@ -7,46 +7,6 @@
 #include <assert.h>
 #include <stdio.h>
 
-#define R_X86_64_NONE		0	/* No reloc */
-#define R_X86_64_64		1	/* Direct 64 bit  */
-#define R_X86_64_PC32		2	/* PC relative 32 bit signed */
-#define R_X86_64_GOT32		3	/* 32 bit GOT entry */
-#define R_X86_64_PLT32		4	/* 32 bit PLT address */
-#define R_X86_64_COPY		5	/* Copy symbol at runtime */
-#define R_X86_64_GLOB_DAT	6	/* Create GOT entry */
-#define R_X86_64_JUMP_SLOT	7	/* Create PLT entry */
-#define R_X86_64_RELATIVE	8	/* Adjust by program base */
-#define R_X86_64_GOTPCREL	9	/* 32 bit signed PC relative offset to GOT */
-#define R_X86_64_32		10	/* Direct 32 bit zero extended */
-#define R_X86_64_32S		11	/* Direct 32 bit sign extended */
-#define R_X86_64_16		12	/* Direct 16 bit zero extended */
-#define R_X86_64_PC16		13	/* 16 bit sign extended pc relative */
-#define R_X86_64_8		14	/* Direct 8 bit sign extended  */
-#define R_X86_64_PC8		15	/* 8 bit sign extended pc relative */
-#define R_X86_64_DTPMOD64	16	/* ID of module containing symbol */
-#define R_X86_64_DTPOFF64	17	/* Offset in module's TLS block */
-#define R_X86_64_TPOFF64	18	/* Offset in initial TLS block */
-#define R_X86_64_TLSGD		19	/* 32 bit signed PC relative offset to two GOT entries for GD symbol */
-#define R_X86_64_TLSLD		20	/* 32 bit signed PC relative offset to two GOT entries for LD symbol */
-#define R_X86_64_DTPOFF32	21	/* Offset in TLS block */
-#define R_X86_64_GOTTPOFF	22	/* 32 bit signed PC relative offset to GOT entry for IE symbol */
-#define R_X86_64_TPOFF32	23	/* Offset in initial TLS block */
-#define R_X86_64_PC64		24	/* PC relative 64 bit */
-#define R_X86_64_GOTOFF64	25	/* 64 bit offset to GOT */
-#define R_X86_64_GOTPC32	26	/* 32 bit signed pc relative offset to GOT */
-#define R_X86_64_GOT64		27	/* 64-bit GOT entry offset */
-#define R_X86_64_GOTPCREL64	28	/* 64-bit PC relative offset to GOT entry */
-#define R_X86_64_GOTPC64	29	/* 64-bit PC relative offset to GOT */
-#define R_X86_64_GOTPLT64	30 	/* like GOT64, says PLT entry needed */
-#define R_X86_64_PLTOFF64	31	/* 64-bit GOT relative offset to PLT entry */
-#define R_X86_64_SIZE32		32	/* Size of symbol plus 32-bit addend */
-#define R_X86_64_SIZE64		33	/* Size of symbol plus 64-bit addend */
-#define R_X86_64_GOTPC32_TLSDESC 34	/* GOT offset for TLS descriptor.  */
-#define R_X86_64_TLSDESC_CALL   35	/* Marker for call through TLS descriptor.  */
-#define R_X86_64_TLSDESC        36	/* TLS descriptor.  */
-#define R_X86_64_IRELATIVE	37	/* Adjust indirectly by program base */
-#define R_X86_64_RELATIVE64	38	/* 64-bit adjust by program base */
-
 typedef struct OrbisElfProgram_s
 {
 	OrbisElfProgramHeader_t header;
@@ -96,6 +56,9 @@ typedef struct OrbisElf_s
 	const char *sceDynlibData;
 	uint64_t sceDynlibDataSize;
 
+	uint64_t sceProcParam;
+	uint64_t sceProcParamSize;
+
 	const char *soName;
 
 	uint64_t pltGotAddress;
@@ -119,8 +82,21 @@ typedef struct OrbisElf_s
 	uint64_t initAddress;
 	uint64_t finiAddress;
 
+	uint64_t preinitArrayAddress;
+	uint64_t preinitArrayCount;
+
+	uint64_t initArrayAddress;
+	uint64_t initArrayCount;
+
+	struct OrbisElfRebase_s *rebases;
+	uint64_t rebasesCount;
+
+	struct OrbisElfImport_s *imports;
+	uint64_t importsCount;
+
 	OrbisElfModuleInfo_t moduleInfo;
-	uint64_t baseAddress;
+	uint64_t virtualBaseAddress;
+	void *baseAddress;
 } OrbisElf_t;
 
 static OrbisElfErrorCode_t parsePrograms(OrbisElfHandle_t elf)
@@ -143,6 +119,7 @@ static OrbisElfErrorCode_t parsePrograms(OrbisElfHandle_t elf)
 		switch (elf->programs[i].header.type)
 		{
 		case orbisElfProgramTypeLoad:
+		case orbisElfProgramTypeSceRelRo:
 			if (elf->programs[i].header.vaddr + elf->programs[i].header.memsz > elf->loadSize)
 			{
 				elf->loadSize = elf->programs[i].header.vaddr + elf->programs[i].header.memsz;
@@ -160,7 +137,8 @@ static OrbisElfErrorCode_t parsePrograms(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfProgramTypeSceProcParam:
-			//TODO
+			elf->sceProcParam = elf->programs[i].header.vaddr;
+			elf->sceProcParamSize = elf->programs[i].header.filesz;
 			break;
 
 		case orbisElfProgramTypeTls:
@@ -243,7 +221,10 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeSceSymTab:
-			elf->sceSymTab = (const OrbisElfSymbolHeader_t *)(elf->sceDynlibData + elf->dynamics[i].value);
+			if (elf->sceDynlibData)
+			{
+				elf->sceSymTab = (const OrbisElfSymbolHeader_t *)(elf->sceDynlibData + elf->dynamics[i].value);
+			}
 			break;
 
 		case orbisElfDynamicTypeSceSymEnt:
@@ -255,7 +236,10 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeSceStrTab:
-			elf->sceStrTab = (const char *)(elf->sceDynlibData + elf->dynamics[i].value);
+			if (elf->sceDynlibData)
+			{
+				elf->sceStrTab = (const char *)(elf->sceDynlibData + elf->dynamics[i].value);
+			}
 			break;
 
 		case orbisElfDynamicTypeSceStrSize:
@@ -276,7 +260,10 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeSceJmpRel:
-			elf->sceJmpRel = (const void *)(elf->sceDynlibData + elf->dynamics[i].value);
+			if (elf->sceDynlibData)
+			{
+				elf->sceJmpRel = (const void *)(elf->sceDynlibData + elf->dynamics[i].value);
+			}
 			break;
 
 		case orbisElfDynamicTypeScePltRel:
@@ -288,7 +275,10 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeSceRela:
-			elf->sceRela = (const OrbisElfRelocationWithAddend_t *)(elf->sceDynlibData + elf->dynamics[i].value);
+			if (elf->sceDynlibData)
+			{
+				elf->sceRela = (const OrbisElfRelocationWithAddend_t *)(elf->sceDynlibData + elf->dynamics[i].value);
+			}
 			break;
 
 		case orbisElfDynamicTypeSceRelaSize:
@@ -312,7 +302,7 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeInitArray:
-			//TODO
+			elf->initArrayAddress = elf->dynamics[i].value;
 			break;
 
 		case orbisElfDynamicTypeFiniArray:
@@ -320,11 +310,7 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeInitArraySize:
-			if (elf->dynamics[i].value)
-			{
-				printf("orbisElfDynamicTypeInitArraySize with value %I64u\n", elf->dynamics[i].value);
-			}
-			//TODO
+			elf->initArrayCount = elf->dynamics[i].value / 8;
 			break;
 
 		case orbisElfDynamicTypeFiniArraySize:
@@ -340,16 +326,12 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypePreinitArray:
-			//TODO
+			printf("orbisElfDynamicTypePreinitArray with value 0x%I64x\n", elf->dynamics[i].value);
+			elf->preinitArrayAddress = elf->dynamics[i].value;
 			break;
 
 		case orbisElfDynamicTypePreinitArraySize:
-			//TODO
-
-			if (elf->dynamics[i].value)
-			{
-				printf("orbisElfDynamicTypePreinitArraySize with value %I64u\n", elf->dynamics[i].value);
-			}
+			elf->preinitArrayCount = elf->dynamics[i].value / 8;
 			break;
 
 		case orbisElfDynamicTypeDebug:
@@ -571,18 +553,239 @@ static OrbisElfErrorCode_t parseSymbols(OrbisElfHandle_t elf)
 		{
 			elf->symbols[i].name = name;
 		}
+	}
 
-		if (elf->symbols[i].header.info == 0 && elf->symbols[i].header.other == 0)
+	return orbisElfErrorCodeOk;
+}
+
+static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
+{
+	int rebaseCount = 0;
+	int importsCount = 0;
+
+	for (uint64_t i = 0, count = elf->sceRelaSize / elf->sceRelaEntSize; i < count; ++i)
+	{
+		uint32_t symbolIndex = elf->sceRela[i].info >> 32;
+		uint32_t relType = elf->sceRela[i].info & 0xffffffff;
+
+		if (relType == orbisElfRelocationTypeNone)
 		{
-			if (strcmp(elf->symbols[i].name, "module_start") == 0)
+			continue;
+		}
+
+		const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
+
+		if (relType != orbisElfRelocationTypeRelative && !sym->header.value)
+		{
+			++importsCount;
+		}
+		else
+		{
+			++rebaseCount;
+		}
+	}
+
+	switch (elf->scePltRelType)
+	{
+	case orbisElfDynamicTypeRela:
+	{
+		const OrbisElfRelocationWithAddend_t *rela = (OrbisElfRelocationWithAddend_t *)elf->sceJmpRel;
+
+		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocationWithAddend_t); i < count; ++i)
+		{
+			if ((rela[i].info & 0xffffffff) != orbisElfRelocationTypeJumpSlot)
 			{
-				elf->symbols[i].header.value = elf->initAddress;
+				assert(0);
+				continue;
 			}
-			else if (strcmp(elf->symbols[i].name, "module_stop") == 0)
+
+			const OrbisElfSymbol_t *sym = elf->symbols + (rela[i].info >> 32);
+
+			if (!sym->header.value)
 			{
-				elf->symbols[i].header.value = elf->finiAddress;
+				++importsCount;
+			}
+			else
+			{
+				++rebaseCount;
 			}
 		}
+		break;
+	}
+
+	case orbisElfDynamicTypeRel:
+	{
+		const OrbisElfRelocation_t *rel = (OrbisElfRelocation_t *)elf->sceJmpRel;
+
+		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocation_t); i < count; ++i)
+		{
+			if ((rel[i].info & 0xffffffff) != orbisElfRelocationTypeJumpSlot)
+			{
+				assert(0);
+				continue;
+			}
+
+			const OrbisElfSymbol_t *sym = elf->symbols + (rel[i].info >> 32);
+
+			if (!sym->header.value)
+			{
+				++importsCount;
+			}
+			else
+			{
+				++rebaseCount;
+			}
+		}
+
+		elf->rebasesCount = rebaseCount;
+		elf->rebases = malloc(sizeof(OrbisElfRebase_t) * elf->rebasesCount);
+
+		elf->importsCount = importsCount;
+		elf->imports = malloc(sizeof(OrbisElfImport_t) * elf->importsCount);
+
+		OrbisElfRebase_t *rebaseIt = elf->rebases;
+		OrbisElfImport_t *importIt = elf->imports;
+
+		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocation_t); i < count; ++i)
+		{
+			uint32_t symbolIndex = rel[i].info >> 32;
+			const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
+
+			if (!sym->header.value)
+			{
+				importIt->offset = rel[i].offset;
+				importIt->symbolIndex = symbolIndex;
+				importIt->relType = rel[i].info & 0xffffffff;
+				importIt->addend = 0;
+
+				++importIt;
+			}
+			else
+			{
+				rebaseIt->offset = rel[i].offset;
+				rebaseIt->value = sym->header.value;
+				rebaseIt->symbolIndex = symbolIndex;
+
+				++rebaseIt;
+			}
+		}
+		break;
+	}
+
+	default:
+		assert(0);
+	}
+
+	elf->rebasesCount = rebaseCount;
+	elf->rebases = malloc(sizeof(OrbisElfRebase_t) * elf->rebasesCount);
+
+	elf->importsCount = importsCount;
+	elf->imports = malloc(sizeof(OrbisElfImport_t) * elf->importsCount);
+
+	OrbisElfRebase_t *rebaseIt = elf->rebases;
+	OrbisElfImport_t *importIt = elf->imports;
+
+	for (uint64_t i = 0, count = elf->sceRelaSize / elf->sceRelaEntSize; i < count; ++i)
+	{
+		uint32_t symbolIndex = elf->sceRela[i].info >> 32;
+		uint32_t relType = elf->sceRela[i].info & 0xffffffff;
+
+		if (relType == orbisElfRelocationTypeNone)
+		{
+			continue;
+		}
+
+		const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
+
+		if (relType == orbisElfRelocationTypeRelative)
+		{
+			rebaseIt->offset = elf->sceRela[i].offset;
+			rebaseIt->value = elf->sceRela[i].addend;
+			rebaseIt->symbolIndex = symbolIndex;
+
+			++rebaseIt;
+
+		}
+		else if (!sym->header.value)
+		{
+			importIt->offset = elf->sceRela[i].offset;
+			importIt->symbolIndex = symbolIndex;
+			importIt->relType = relType;
+			importIt->addend = elf->sceRela[i].addend;
+
+			++importIt;
+		}
+		else
+		{
+			rebaseIt->offset = elf->sceRela[i].offset;
+			rebaseIt->value = sym->header.value;
+			rebaseIt->symbolIndex = symbolIndex;
+
+			++rebaseIt;
+		}
+	}
+
+	switch (elf->scePltRelType)
+	{
+	case orbisElfDynamicTypeRela:
+	{
+		const OrbisElfRelocationWithAddend_t *rela = (OrbisElfRelocationWithAddend_t *)elf->sceJmpRel;
+
+		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocationWithAddend_t); i < count; ++i)
+		{
+			uint32_t symbolIndex = rela[i].info >> 32;
+			const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
+
+			if (!sym->header.value)
+			{
+				importIt->offset = rela[i].offset;
+				importIt->symbolIndex = symbolIndex;
+				importIt->relType = rela[i].info & 0xffffffff;
+				importIt->addend = rela[i].addend;
+
+				++importIt;
+			}
+			else
+			{
+				rebaseIt->offset = rela[i].offset;
+				rebaseIt->value = sym->header.value + rela[i].addend;
+				rebaseIt->symbolIndex = symbolIndex;
+
+				++rebaseIt;
+			}
+		}
+		break;
+	}
+
+	case orbisElfDynamicTypeRel:
+	{
+		const OrbisElfRelocation_t *rel = (OrbisElfRelocation_t *)elf->sceJmpRel;
+
+		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocation_t); i < count; ++i)
+		{
+			uint32_t symbolIndex = rel[i].info >> 32;
+			const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
+
+			if (!sym->header.value)
+			{
+				importIt->offset = rel[i].offset;
+				importIt->symbolIndex = symbolIndex;
+				importIt->relType = rel[i].info & 0xffffffff;
+				importIt->addend = 0;
+
+				++importIt;
+			}
+			else
+			{
+				rebaseIt->offset = rel[i].offset;
+				rebaseIt->value = sym->header.value;
+				rebaseIt->symbolIndex = symbolIndex;
+
+				++rebaseIt;
+			}
+		}
+		break;
+	}
 	}
 
 	return orbisElfErrorCodeOk;
@@ -645,6 +848,7 @@ OrbisElfErrorCode_t orbisElfParse(const void *image, size_t size, OrbisElfHandle
 	isOk = isOk && (errorCode = parseSections(elf)) == orbisElfErrorCodeOk;
 	isOk = isOk && (errorCode = parseDynamicProgram(elf)) == orbisElfErrorCodeOk;
 	isOk = isOk && (errorCode = parseSymbols(elf)) == orbisElfErrorCodeOk;
+	isOk = isOk && (errorCode = parseRelocations(elf)) == orbisElfErrorCodeOk;
 
 	if (!isOk)
 	{
@@ -656,259 +860,22 @@ OrbisElfErrorCode_t orbisElfParse(const void *image, size_t size, OrbisElfHandle
 	return orbisElfErrorCodeOk;
 }
 
-OrbisElfErrorCode_t orbisElfLoad(OrbisElfHandle_t elf, void *address)
+OrbisElfErrorCode_t orbisElfLoad(OrbisElfHandle_t elf, void *baseAddress, uint64_t virtualBaseAddress)
 {
-	elf->baseAddress = (uint64_t)address;
+	elf->virtualBaseAddress = virtualBaseAddress ? virtualBaseAddress : (uint64_t)baseAddress;
+	elf->baseAddress = baseAddress;
+
+	for (uint64_t i = 0; i < elf->symbolsCount; ++i)
+	{
+		elf->symbols[i].baseAddress = elf->baseAddress;
+		elf->symbols[i].virtualBaseAddress = elf->virtualBaseAddress;
+	}
 
 	for (uint16_t i = 0; i < elf->programsCount; ++i)
 	{
-		if (elf->programs[i].header.type == orbisElfProgramTypeLoad)
+		if (elf->programs[i].header.type == orbisElfProgramTypeLoad || elf->programs[i].header.type == orbisElfProgramTypeSceRelRo)
 		{
-			memcpy((char *)address + elf->programs[i].header.vaddr, (const char *)elf->image + elf->programs[i].header.offset, elf->programs[i].header.filesz);
-		}
-	}
-
-	return orbisElfErrorCodeOk;
-}
-
-OrbisElfErrorCode_t orbisElfImportModule(OrbisElfHandle_t elf, OrbisElfHandle_t importElf)
-{
-	for (uint64_t importSymbolIndex = 0; importSymbolIndex < elf->symbolsCount; ++importSymbolIndex)
-	{
-		if (!elf->symbols[importSymbolIndex].module || !elf->symbols[importSymbolIndex].library)
-		{
-			continue;
-		}
-
-		if (strcmp(elf->symbols[importSymbolIndex].module->name, importElf->moduleInfo.name) != 0)
-		{
-			continue;
-		}
-
-		for (uint64_t exportSymbolIndex = 0; exportSymbolIndex < importElf->symbolsCount; ++exportSymbolIndex)
-		{
-			if (!importElf->symbols[exportSymbolIndex].library || !importElf->symbols[exportSymbolIndex].header.value)
-			{
-				continue;
-			}
-
-			if (elf->symbols[importSymbolIndex].type != importElf->symbols[exportSymbolIndex].type)
-			{
-				continue;
-			}
-
-			if (strcmp(elf->symbols[importSymbolIndex].library->name, importElf->symbols[exportSymbolIndex].library->name) != 0)
-			{
-				continue;
-			}
-
-			if (strcmp(elf->symbols[importSymbolIndex].name, importElf->symbols[exportSymbolIndex].name) != 0)
-			{
-				continue;
-			}
-
-			elf->symbols[importSymbolIndex].header.value = importElf->symbols[exportSymbolIndex].header.value;
-			elf->symbols[importSymbolIndex].baseAddress = importElf->baseAddress;
-			break;
-		}
-	}
-
-	return orbisElfErrorCodeOk;
-}
-
-OrbisElfErrorCode_t orbisElfImportSymbol(OrbisElfHandle_t elf, const char *moduleName, const char *libraryName, const char *symbolName, uint64_t value)
-{
-	for (uint64_t importSymbolIndex = 0; importSymbolIndex < elf->symbolsCount; ++importSymbolIndex)
-	{
-		if (!elf->symbols[importSymbolIndex].module || !elf->symbols[importSymbolIndex].library)
-		{
-			continue;
-		}
-
-		if (strcmp(elf->symbols[importSymbolIndex].module->name, moduleName) != 0)
-		{
-			continue;
-		}
-
-		if (strcmp(elf->symbols[importSymbolIndex].library->name, libraryName) != 0)
-		{
-			continue;
-		}
-
-		if (strcmp(elf->symbols[importSymbolIndex].name, symbolName) != 0)
-		{
-			continue;
-		}
-
-		elf->symbols[importSymbolIndex].header.value = value - 0x10;
-		elf->symbols[importSymbolIndex].baseAddress = 0x10;
-		return orbisElfErrorCodeOk;
-	}
-
-	return orbisElfErrorCodeNotFound;
-}
-
-OrbisElfErrorCode_t orbisElfRelocate(OrbisElfHandle_t elf)
-{
-	if (elf->scePltRelSize)
-	{
-		switch (elf->scePltRelType)
-		{
-		case orbisElfDynamicTypeRela:
-			for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocationWithAddend_t); i < count; ++i)
-			{
-				const OrbisElfRelocationWithAddend_t *rela = ((OrbisElfRelocationWithAddend_t *)elf->sceJmpRel) + i;
-
-				if ((rela->info & 0xffffffff) != R_X86_64_JUMP_SLOT)
-				{
-					assert(0);
-					continue;
-				}
-
-				const OrbisElfSymbol_t *sym = elf->symbols + (rela->info >> 32);
-
-				if (!sym->header.value)
-				{
-					if (sym->module && sym->library)
-					{
-						printf("%s: Unresolved symbol '%s::%s::%s'\n", elf->moduleInfo.name, sym->module->name, sym->library->name, sym->name);
-					}
-					else
-					{
-						printf("%s: Unresolved symbol '%s'\n", elf->moduleInfo.name, sym->name);
-					}
-
-					*(uint64_t *)(elf->baseAddress + rela->offset) = 0xDEADBEEFBADCAFE1;
-				}
-				else
-				{
-
-					uint64_t symbolBaseAddress = sym->baseAddress ? sym->baseAddress : elf->baseAddress;
-
-					*(uint64_t *)(elf->baseAddress + rela->offset) += sym->baseAddress + sym->header.value + rela->addend;
-				}
-			}
-			break;
-
-		case orbisElfDynamicTypeRel:
-			for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocation_t); i < count; ++i)
-			{
-				const OrbisElfRelocation_t *rel = ((OrbisElfRelocation_t *)elf->sceJmpRel) + i;
-
-				if ((rel->info & 0xffffffff) != R_X86_64_JUMP_SLOT)
-				{
-					assert(0);
-					continue;
-				}
-
-				const OrbisElfSymbol_t *sym = elf->symbols + (rel->info >> 32);
-
-				if (!sym->header.value)
-				{
-					if (sym->module && sym->library)
-					{
-						printf("%s: Unresolved symbol '%s::%s::%s'\n", elf->moduleInfo.name, sym->module->name, sym->library->name, sym->name);
-					}
-					else
-					{
-						printf("%s: Unresolved symbol '%s'\n", elf->moduleInfo.name, sym->name);
-					}
-				}
-
-				uint64_t symbolBaseAddress = sym->baseAddress ? sym->baseAddress : elf->baseAddress;
-
-				*(uint64_t *)(elf->baseAddress + rel->offset) += sym->baseAddress + sym->header.value;
-			}
-			break;
-
-		default:
-			assert(0);
-		}
-	}
-
-	for (uint64_t i = 0, count = elf->sceRelaSize / elf->sceRelaEntSize; i < count; ++i)
-	{
-		OrbisElfRelocationWithAddend_t rela = elf->sceRela[i];
-		uint64_t *where = (uint64_t *)(elf->baseAddress + rela.offset);
-		uint32_t *where32 = (uint32_t *)where;
-		uint32_t relaType = rela.info & 0xffffffff;
-
-		const OrbisElfSymbol_t *sym = elf->symbols + (rela.info >> 32);
-		uint64_t symVal = 0;
-
-		switch (relaType)
-		{
-		case R_X86_64_64:
-		case R_X86_64_PC32:
-		case R_X86_64_GLOB_DAT:
-			if (!sym->header.value)
-			{
-				if (sym->module && sym->library)
-				{
-					printf("%s: Unresolved symbol '%s::%s::%s' rel %u\n", elf->moduleInfo.name, sym->module->name, sym->library->name, sym->name, relaType);
-				}
-				else
-				{
-					printf("%s: Unresolved symbol '%s' rel %u\n", elf->moduleInfo.name, sym->name, relaType);
-				}
-			}
-			else
-			{
-				symVal = (sym->baseAddress ? sym->baseAddress : elf->baseAddress) + sym->header.value;
-			}
-			break;
-		}
-
-		switch (relaType)
-		{
-		case R_X86_64_NONE:
-			break;
-
-		case R_X86_64_64:
-			*where = symVal + rela.addend;
-			break;
-
-		case R_X86_64_PC32:
-			*where32 = (uint32_t)(symVal + rela.addend - (uint64_t)where);
-			break;
-
-		case R_X86_64_COPY:
-			fprintf(stderr, "%s: Unexpected R_X86_64_COPY relocation in shared library\n", elf->moduleInfo.name);
-			break;
-
-		case R_X86_64_GLOB_DAT:
-			*where = symVal;
-			break;
-
-		case R_X86_64_TPOFF64:
-			*where += sym->header.value - elf->tlsOffset + rela.addend;
-			fprintf(stderr, "%s: TLS relocation\n", elf->moduleInfo.name);
-			break;
-
-		case R_X86_64_TPOFF32:
-			*where32 += (uint32_t)(sym->header.value - elf->tlsOffset + rela.addend);
-			fprintf(stderr, "%s: TLS32 relocation\n", elf->moduleInfo.name);
-			break;
-
-		case R_X86_64_DTPMOD64:
-			*where += elf->tlsIndex;
-			break;
-
-		case R_X86_64_DTPOFF64:
-			*where += sym->header.value + rela.addend;
-			break;
-
-		case R_X86_64_DTPOFF32:
-			*where32 += (uint32_t)(sym->header.value + rela.addend);
-			break;
-
-		case R_X86_64_RELATIVE:
-			*where = elf->baseAddress + rela.addend;
-			break;
-
-		default:
-			fprintf(stderr, "Unsupported relocation type %u in non-PLT relocations\n", relaType);
-			break;
+			memcpy((char *)baseAddress + elf->programs[i].header.vaddr, (const char *)elf->image + elf->programs[i].header.offset, elf->programs[i].header.filesz);
 		}
 	}
 
@@ -917,7 +884,7 @@ OrbisElfErrorCode_t orbisElfRelocate(OrbisElfHandle_t elf)
 
 OrbisElfErrorCode_t orbisElfInitializeTls(OrbisElfHandle_t elf, void *tls)
 {
-	memcpy(tls, (void *)(elf->baseAddress + elf->tlsInitAddress), elf->tlsInitSize);
+	memcpy(tls, (void *)((char *)elf->baseAddress + elf->tlsInitAddress), elf->tlsInitSize);
 	memset((char *)tls + elf->tlsInitSize, 0, elf->tlsSize - elf->tlsInitSize);
 
 	return orbisElfErrorCodeOk;
@@ -940,6 +907,8 @@ void orbisElfDestroy(OrbisElfHandle_t elf)
 	}
 
 	free(elf->symbols);
+	free(elf->imports);
+	free(elf->rebases);
 	free(elf);
 }
 
@@ -1003,9 +972,29 @@ const char *orbisElfGetSoName(OrbisElfHandle_t elf)
 	return elf->soName;
 }
 
+uint64_t orbisElfGetSceProcParam(OrbisElfHandle_t elf, uint64_t *size)
+{
+	if (size)
+	{
+		*size = elf->sceProcParam ? elf->sceProcParamSize : 0;
+	}
+
+	return elf->sceProcParam ? orbisElfGetVirtualBaseAddress(elf) + elf->sceProcParam : 0;
+}
+
 uint64_t orbisElfGetEntryPoint(OrbisElfHandle_t elf)
 {
-	return elf->baseAddress + elf->header.entry;
+	return elf->header.entry;
+}
+
+uint64_t orbisElfGetVirtualBaseAddress(OrbisElfHandle_t elf)
+{
+	return elf->virtualBaseAddress;
+}
+
+void *orbisElfGetBaseAddress(OrbisElfHandle_t elf)
+{
+	return elf->baseAddress;
 }
 
 uint16_t orbisElfGetProgramsCount(OrbisElfHandle_t elf)
@@ -1036,6 +1025,31 @@ uint64_t orbisElfGetExportLibrariesCount(OrbisElfHandle_t elf)
 uint64_t orbisElfGetSymbolsCount(OrbisElfHandle_t elf)
 {
 	return elf->symbolsCount;
+}
+
+uint64_t orbisElfGetInitAddress(OrbisElfHandle_t elf)
+{
+	return elf->initAddress;
+}
+
+uint64_t orbisElfGetPreinitArray(OrbisElfHandle_t elf, uint64_t *count)
+{
+	if (count)
+	{
+		*count = elf->preinitArrayCount;
+	}
+
+	return elf->preinitArrayAddress;
+}
+
+uint64_t orbisElfGetInitArray(OrbisElfHandle_t elf, uint64_t *count)
+{
+	if (count)
+	{
+		*count = elf->initArrayCount;
+	}
+
+	return elf->initArrayAddress;
 }
 
 OrbisElfProgramHandle_t orbisElfGetProgram(OrbisElfHandle_t elf, uint16_t index)
@@ -1096,6 +1110,19 @@ const OrbisElfSymbol_t *orbisElfGetSymbol(OrbisElfHandle_t elf, uint64_t index)
 	}
 
 	return elf->symbols + index;
+}
+
+const OrbisElfSymbol_t *orbisElfFindSymbolByName(OrbisElfHandle_t elf, const char *name)
+{
+	for (uint16_t i = 0; i < elf->symbolsCount; ++i)
+	{
+		if (strcmp(elf->symbols[i].name, name) == 0)
+		{
+			return elf->symbols + i;
+		}
+	}
+
+	return NULL;
 }
 
 OrbisElfSectionHandle_t orbisElfFindSectionByName(OrbisElfHandle_t elf, const char *name)
@@ -1185,3 +1212,102 @@ const char *orbisElfSectionGetName(OrbisElfSectionHandle_t section)
 	return section->name;
 }
 
+uint64_t orbisElfGetRebasesCount(OrbisElfHandle_t elf)
+{
+	return elf->rebasesCount;
+}
+
+OrbisElfRebase_t *orbisElfGetRebase(OrbisElfHandle_t elf, uint64_t index)
+{
+	if (index >= elf->rebasesCount)
+	{
+		return NULL;
+	}
+
+	return elf->rebases + index;
+}
+
+uint64_t orbisElfGetImportsCount(OrbisElfHandle_t elf)
+{
+	return elf->importsCount;
+}
+
+OrbisElfImport_t *orbisElfGetImport(OrbisElfHandle_t elf, uint64_t index)
+{
+	if (index >= elf->importsCount)
+	{
+		return NULL;
+	}
+
+	return elf->imports + index;
+}
+
+uint8_t orbisElfGetImportAddressSize(OrbisElfImport_t *import)
+{
+	switch (import->relType)
+	{
+	case orbisElfRelocationTypePc32:
+	case orbisElfRelocationTypeTpOff32:
+	case orbisElfRelocationTypeDtpOff32:
+		return 4;
+	
+	default:
+		return 8;
+	}
+}
+
+uint64_t orbisElfGetImportValue(OrbisElfImport_t *import, OrbisElfHandle_t elf)
+{
+	const OrbisElfSymbol_t *sym = elf->symbols + import->symbolIndex;
+
+	switch (import->relType)
+	{
+	case orbisElfRelocationType64:
+		return sym->header.value + import->addend;
+
+	case orbisElfRelocationTypePc32:
+		return (uint32_t)(sym->header.value + import->addend - (elf->virtualBaseAddress + import->offset));
+
+	case orbisElfRelocationTypeCopy:
+		fprintf(stderr, "%s: Unexpected R_X86_64_COPY relocation in shared library\n", elf->moduleInfo.name);
+		return 0;
+
+	case orbisElfRelocationTypeGlobDat:
+		return sym->header.value;
+
+	case orbisElfRelocationTypeDtpMod64:
+		return elf->tlsIndex;
+
+	case orbisElfRelocationTypeDtpOff64:
+		return sym->header.value + import->addend;
+
+	case orbisElfRelocationTypeTpOff64:
+		return sym->header.value - elf->tlsOffset + import->addend;
+
+	case orbisElfRelocationTypeDtpOff32:
+		return (uint32_t)(sym->header.value + import->addend);
+
+	case orbisElfRelocationTypeTpOff32:
+		return (uint32_t)(sym->header.value - elf->tlsOffset + import->addend);
+
+	default:
+		fprintf(stderr, "%s: Unsupported relocation type %u in non-PLT relocations\n", elf->moduleInfo.name, import->relType);
+		return 0;
+	}
+}
+
+OrbisElfImportInjectType_t orbisElfGetImportInjectType(OrbisElfImport_t *import)
+{
+	switch (import->relType)
+	{
+	case orbisElfRelocationTypeDtpMod64:
+	case orbisElfRelocationTypeDtpOff64:
+	case orbisElfRelocationTypeTpOff64:
+	case orbisElfRelocationTypeDtpOff32:
+	case orbisElfRelocationTypeTpOff32:
+		return orbisElfImportInjectTypeAdd;
+
+	default:
+		return orbisElfImportInjectTypeSet;
+	}
+}

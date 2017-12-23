@@ -7,9 +7,6 @@ typedef struct OrbisElf_s *OrbisElfHandle_t;
 typedef struct OrbisElfProgram_s *OrbisElfProgramHandle_t;
 typedef struct OrbisElfSection_s *OrbisElfSectionHandle_t;
 
-typedef struct OrbisElfImport_s *OrbisElfImportHandle_t;
-typedef struct OrbisElfExport_s *OrbisElfExportHandle_t;
-
 typedef struct
 {
 	uint8_t magic[4];
@@ -114,8 +111,23 @@ typedef struct OrbisElfSymbol_s
 	const OrbisElfLibraryInfo_t *library;
 	enum OrbisElfSymbolBind_t bind;
 	enum OrbisElfSymbolType_t type;
-	uint64_t baseAddress;
+	uint64_t virtualBaseAddress;
+	void *baseAddress;
 } OrbisElfSymbol_t;
 
+typedef struct OrbisElfImport_s
+{
+	uint64_t offset;
+	int64_t addend;
+	uint32_t symbolIndex;
+	uint32_t relType; /* see OrbisElfRelocationType_t */
+} OrbisElfImport_t;
+
+typedef struct OrbisElfRebase_s
+{
+	uint64_t offset;
+	uint64_t value;
+	uint32_t symbolIndex;
+} OrbisElfRebase_t;
 
 #endif /* _ORBIS_ELF_TYPES_H_ */
