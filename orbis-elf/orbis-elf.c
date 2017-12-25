@@ -436,6 +436,8 @@ int main(int argc, const char *argv[])
 		printf("TLS offset: 0x%" PRIx64 "\n", orbisElfGetTlsOffset(elf));
 		printf("TLS size: 0x%" PRIx64 "\n", orbisElfGetTlsSize(elf));
 		printf("TLS align: 0x%" PRIx64 "\n", orbisElfGetTlsAlign(elf));
+		printf("TLS init address: 0x%" PRIx64 "\n", orbisElfGetTlsInitAddress(elf));
+		printf("TLS init size: 0x%" PRIx64 "\n", orbisElfGetTlsInitSize(elf));
 	}
 
 	orbisElfDestroy(elf);

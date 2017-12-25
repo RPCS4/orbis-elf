@@ -142,6 +142,7 @@ static OrbisElfErrorCode_t parsePrograms(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfProgramTypeTls:
+			elf->tlsOffset = elf->programs[i].header.offset;
 			elf->tlsSize = elf->programs[i].header.memsz;
 			elf->tlsAlign = elf->programs[i].header.align;
 			elf->tlsInitSize = elf->programs[i].header.filesz;
@@ -575,13 +576,13 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 
 		const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
 
-		if (relType != orbisElfRelocationTypeRelative && !sym->header.value)
+		if (relType == orbisElfRelocationTypeRelative)
 		{
-			++importsCount;
+			++rebaseCount;
 		}
 		else
 		{
-			++rebaseCount;
+			++importsCount;
 		}
 	}
 
@@ -704,9 +705,8 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 			rebaseIt->symbolIndex = symbolIndex;
 
 			++rebaseIt;
-
 		}
-		else if (!sym->header.value)
+		else
 		{
 			importIt->offset = elf->sceRela[i].offset;
 			importIt->symbolIndex = symbolIndex;
@@ -714,14 +714,6 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 			importIt->addend = elf->sceRela[i].addend;
 
 			++importIt;
-		}
-		else
-		{
-			rebaseIt->offset = elf->sceRela[i].offset;
-			rebaseIt->value = sym->header.value;
-			rebaseIt->symbolIndex = symbolIndex;
-
-			++rebaseIt;
 		}
 	}
 
@@ -955,6 +947,16 @@ void orbisElfSetTlsIndex(OrbisElfHandle_t elf, uint64_t index)
 uint64_t orbisElfGetTlsOffset(OrbisElfHandle_t elf)
 {
 	return elf->tlsOffset;
+}
+
+uint64_t orbisElfGetTlsInitAddress(OrbisElfHandle_t elf)
+{
+	return elf->tlsInitAddress;
+}
+
+uint64_t orbisElfGetTlsInitSize(OrbisElfHandle_t elf)
+{
+	return elf->tlsInitSize;
 }
 
 void orbisElfSetTlsOffset(OrbisElfHandle_t elf, uint64_t offset)

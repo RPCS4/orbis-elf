@@ -25,6 +25,8 @@ uint64_t orbisElfGetTlsSize(OrbisElfHandle_t elf);
 uint64_t orbisElfGetTlsAlign(OrbisElfHandle_t elf);
 uint64_t orbisElfGetTlsIndex(OrbisElfHandle_t elf);
 uint64_t orbisElfGetTlsOffset(OrbisElfHandle_t elf);
+uint64_t orbisElfGetTlsInitAddress(OrbisElfHandle_t elf);
+uint64_t orbisElfGetTlsInitSize(OrbisElfHandle_t elf);
 void orbisElfSetTlsIndex(OrbisElfHandle_t elf, uint64_t index);
 void orbisElfSetTlsOffset(OrbisElfHandle_t elf, uint64_t offset);
 uint64_t orbisElfGetLoadSize(OrbisElfHandle_t elf);
