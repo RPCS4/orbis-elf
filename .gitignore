@@ -1,2 +1,6 @@
 /build
 /.vs
+/liborbis-elf/source/orbis-elf-api.o
+/liborbis-elf/liborbis-elf.a
+/orbis-elf/orbis-elf.o
+/orbis-elf/orbis-elf
