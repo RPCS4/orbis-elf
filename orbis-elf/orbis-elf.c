@@ -10,6 +10,10 @@
 	#define stat64 _stat64
 #endif
 
+#ifdef __GNUC__
+#define stat64 stat
+#endif
+
 const char *orbisElfErrorCodeToString(OrbisElfErrorCode_t error)
 {
 	switch (error)
