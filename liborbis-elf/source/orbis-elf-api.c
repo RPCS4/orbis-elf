@@ -1,5 +1,5 @@
-#include "orbis-elf-types.h"
 #include "orbis-elf-enums.h"
+#include "orbis-elf-types.h"
 #include "orbis-elf-api.h"
 
 #include <malloc.h>
