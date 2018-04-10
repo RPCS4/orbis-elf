@@ -7,28 +7,18 @@
 #include <assert.h>
 #include <stdio.h>
 
-typedef struct OrbisElfProgram_s
-{
-	OrbisElfProgramHeader_t header;
-	const void *data;
-} OrbisElfProgram_t;
-
-typedef struct OrbisElfSection_s
-{
-	OrbisElfSectionHeader_t header;
-	const char *name;
-	const void *data;
-} OrbisElfSection_t;
-
 typedef struct OrbisElf_s
 {
-	const void *image;
+	OrbisElfReadCallback_t read;
+	void *readUserData;
+	size_t imageSize;
+	
 	OrbisElfHeader_t header;
 
-	OrbisElfProgram_t *programs;
+	OrbisElfProgramHeader_t *programs;
 	uint16_t programsCount;
 
-	OrbisElfSection_t *sections;
+	OrbisElfSectionHeader_t *sections;
 	uint16_t sectionsCount;
 
 	OrbisElfLibraryInfo_t *importLibraries;
@@ -62,8 +52,6 @@ typedef struct OrbisElf_s
 	const char *soName;
 
 	uint64_t pltGotAddress;
-	uint64_t tlsIndex;
-	uint64_t tlsOffset;
 	uint64_t tlsSize;
 	uint64_t tlsAlign;
 	uint64_t tlsInitSize;
@@ -75,7 +63,7 @@ typedef struct OrbisElf_s
 	uint64_t scePltRelSize;
 	const void *sceJmpRel;
 
-	const OrbisElfRelocationWithAddend_t *sceRela;
+	const OrbisElfRela_t *sceRela;
 	uint64_t sceRelaSize;
 	uint64_t sceRelaEntSize;
 
@@ -88,20 +76,37 @@ typedef struct OrbisElf_s
 	uint64_t initArrayAddress;
 	uint64_t initArrayCount;
 
-	struct OrbisElfRebase_s *rebases;
-	uint64_t rebasesCount;
+	uint64_t finiArrayAddress;
+	uint64_t finiArrayCount;
 
-	struct OrbisElfImport_s *imports;
-	uint64_t importsCount;
+	const char **needed;
+	uint64_t neededCount;
+
+	const char *originalFileName;
+
+	OrbisElfRebaseRelocation_t *rebaseRelocations;
+	uint64_t rebaseRelocationsCount;
+
+	OrbisElfRelocation_t *importRelocations;
+	uint64_t importRelocationsCount;
+
+	OrbisElfRelocation_t *tlsRelocations;
+	uint64_t tlsRelocationsCount;
 
 	OrbisElfModuleInfo_t moduleInfo;
 	uint64_t virtualBaseAddress;
+
 	void *baseAddress;
 } OrbisElf_t;
 
 static OrbisElfErrorCode_t parsePrograms(OrbisElfHandle_t elf)
 {
-	elf->programs = malloc(sizeof(OrbisElfProgram_t) * elf->header.phnum);
+	if (elf->header.phentsize != sizeof(OrbisElfProgramHeader_t))
+	{
+		return orbisElfErrorCodeCorruptedImage;
+	}
+	
+	elf->programs = malloc(elf->header.phentsize * elf->header.phnum);
 
 	if (!elf->programs)
 	{
@@ -109,44 +114,70 @@ static OrbisElfErrorCode_t parsePrograms(OrbisElfHandle_t elf)
 	}
 
 	elf->programsCount = elf->header.phnum;
-	memset(elf->programs, 0, sizeof(OrbisElfProgram_t) * elf->programsCount);
+	
+	if (orbisElfRead(elf, elf->header.phoff, elf->programs, elf->header.phnum * elf->header.phentsize) != elf->header.phnum * elf->header.phentsize)
+	{
+		return orbisElfErrorCodeIoError;
+	}
+	
+	OrbisElfErrorCode_t error = orbisElfErrorCodeOk;
 
 	for (uint16_t i = 0; i < elf->programsCount; ++i)
 	{
-		elf->programs[i].header = ((const OrbisElfProgramHeader_t *)((const char *)elf->image + elf->header.phoff))[i];
-		elf->programs[i].data = (const char *)elf->image + elf->programs[i].header.offset;
-
-		switch (elf->programs[i].header.type)
+		switch (elf->programs[i].type)
 		{
 		case orbisElfProgramTypeLoad:
 		case orbisElfProgramTypeSceRelRo:
-			if (elf->programs[i].header.vaddr + elf->programs[i].header.memsz > elf->loadSize)
+			if (elf->programs[i].vaddr + elf->programs[i].memsz > elf->loadSize)
 			{
-				elf->loadSize = elf->programs[i].header.vaddr + elf->programs[i].header.memsz;
+				elf->loadSize = elf->programs[i].vaddr + elf->programs[i].memsz;
 			}
 			break;
 
 		case orbisElfProgramTypeDynamic:
-			elf->dynamics = elf->programs[i].data;
-			elf->dynamicsCount = elf->programs[i].header.filesz / sizeof(OrbisElfDynamic_t);
+			if (elf->programs[i].filesz)
+			{
+				void *allocatedData = malloc(elf->programs[i].filesz);
+				elf->dynamics = allocatedData;
+				
+				if (orbisElfRead(elf, elf->programs[i].offset, allocatedData, elf->programs[i].filesz) != elf->programs[i].filesz)
+				{
+					error = orbisElfErrorCodeIoError;
+				}
+				else
+				{
+					elf->dynamicsCount = elf->programs[i].filesz / sizeof(OrbisElfDynamic_t);
+				}
+			}
 			break;
 
 		case orbisElfProgramTypeSceDynlibData:
-			elf->sceDynlibData = elf->programs[i].data;
-			elf->sceDynlibDataSize = elf->programs[i].header.filesz;
+			if (elf->programs[i].filesz)
+			{
+				void *allocatedData = malloc(elf->programs[i].filesz);
+				elf->sceDynlibData = allocatedData;
+				
+				if (orbisElfRead(elf, elf->programs[i].offset, allocatedData, elf->programs[i].filesz) != elf->programs[i].filesz)
+				{
+					error = orbisElfErrorCodeIoError;
+				}
+				else
+				{
+					elf->sceDynlibDataSize = elf->programs[i].filesz;
+				}
+			}
 			break;
 
 		case orbisElfProgramTypeSceProcParam:
-			elf->sceProcParam = elf->programs[i].header.vaddr;
-			elf->sceProcParamSize = elf->programs[i].header.filesz;
+			elf->sceProcParam = elf->programs[i].vaddr;
+			elf->sceProcParamSize = elf->programs[i].filesz;
 			break;
 
 		case orbisElfProgramTypeTls:
-			elf->tlsOffset = elf->programs[i].header.offset;
-			elf->tlsSize = elf->programs[i].header.memsz;
-			elf->tlsAlign = elf->programs[i].header.align;
-			elf->tlsInitSize = elf->programs[i].header.filesz;
-			elf->tlsInitAddress = elf->programs[i].header.vaddr;
+			elf->tlsSize = elf->programs[i].memsz;
+			elf->tlsAlign = elf->programs[i].align;
+			elf->tlsInitSize = elf->programs[i].filesz;
+			elf->tlsInitAddress = elf->programs[i].vaddr;
 			break;
 		}
 	}
@@ -156,6 +187,7 @@ static OrbisElfErrorCode_t parsePrograms(OrbisElfHandle_t elf)
 
 static OrbisElfErrorCode_t parseSections(OrbisElfHandle_t elf)
 {
+	/*
 	elf->sections = malloc(sizeof(OrbisElfSection_t) * elf->header.shnum);
 
 	if (!elf->sections)
@@ -188,7 +220,7 @@ static OrbisElfErrorCode_t parseSections(OrbisElfHandle_t elf)
 			elf->sections[i].name = (const char *)elf->image + strsection->offset + elf->sections[i].header.name;
 		}
 	}
-
+	*/
 	return orbisElfErrorCodeOk;
 }
 
@@ -200,7 +232,9 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 	}
 
 	elf->sceSymTabEntrySize = sizeof(OrbisElfSymbolHeader_t);
-	elf->sceRelaEntSize = sizeof(OrbisElfRelocationWithAddend_t);
+	elf->sceRelaEntSize = sizeof(OrbisElfRela_t);
+
+	int neededCount = 0;
 
 	for (uint64_t i = 0; i < elf->dynamicsCount && elf->dynamics[i].type != orbisElfDynamicTypeNull; ++i)
 	{
@@ -278,7 +312,7 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 		case orbisElfDynamicTypeSceRela:
 			if (elf->sceDynlibData)
 			{
-				elf->sceRela = (const OrbisElfRelocationWithAddend_t *)(elf->sceDynlibData + elf->dynamics[i].value);
+				elf->sceRela = (const OrbisElfRela_t *)(elf->sceDynlibData + elf->dynamics[i].value);
 			}
 			break;
 
@@ -299,7 +333,7 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeNeeded:
-			//TODO
+			neededCount++;
 			break;
 
 		case orbisElfDynamicTypeInitArray:
@@ -307,7 +341,7 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeFiniArray:
-			//TODO
+			elf->finiArrayAddress = elf->dynamics[i].value;
 			break;
 
 		case orbisElfDynamicTypeInitArraySize:
@@ -315,11 +349,7 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeFiniArraySize:
-			//TODO
-			if (elf->dynamics[i].value)
-			{
-				printf("orbisElfDynamicTypeFiniArraySize with value %I64u\n", elf->dynamics[i].value);
-			}
+			elf->finiArrayCount = elf->dynamics[i].value / 8;
 			break;
 
 		case orbisElfDynamicTypeFlags:
@@ -327,7 +357,6 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypePreinitArray:
-			printf("orbisElfDynamicTypePreinitArray with value 0x%I64x\n", elf->dynamics[i].value);
 			elf->preinitArrayAddress = elf->dynamics[i].value;
 			break;
 
@@ -340,7 +369,7 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 
 			if (elf->dynamics[i].value)
 			{
-				printf("orbisElfDynamicTypeDebug with value %I64u\n", elf->dynamics[i].value);
+				printf("orbisElfDynamicTypeDebug with value %lu\n", elf->dynamics[i].value);
 			}
 			break;
 
@@ -349,7 +378,7 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 
 			if (elf->dynamics[i].value)
 			{
-				printf("orbisElfDynamicTypeDebug with value %I64u\n", elf->dynamics[i].value);
+				printf("orbisElfDynamicTypeDebug with value %lu\n", elf->dynamics[i].value);
 			}
 			break;
 
@@ -374,7 +403,7 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		default:
-			printf("Unhandled dynamic type 0x%I64x\n", elf->dynamics[i].type);
+			printf("Unhandled dynamic type 0x%lx\n", elf->dynamics[i].type);
 			continue;
 		}
 	}
@@ -420,25 +449,39 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 		memset(elf->exportLibraries, 0, sizeof(OrbisElfLibraryInfo_t) * elf->exportLibrariesCount);
 	}
 
-	for (uint64_t i = 0, moduleIndex = 0, importLibraryIndex = 0, exportLibraryIndex = 0; i < elf->dynamicsCount; ++i)
+	if (neededCount)
 	{
+		elf->needed = malloc(sizeof(char *) * neededCount);
+
+		if (!elf->needed)
+		{
+			return orbisElfErrorCodeNoMemory;
+		}
+
+		elf->neededCount = neededCount;
+	}
+
+	for (uint64_t i = 0, moduleIndex = 0, importLibraryIndex = 0, exportLibraryIndex = 0, neededIndex = 0; i < elf->dynamicsCount; ++i)
+	{
+		const char *name = elf->sceStrTab + (elf->dynamics[i].value & 0xffffffff);
+
 		switch (elf->dynamics[i].type)
 		{
 		case orbisElfDynamicTypeSoName:
-			elf->soName = elf->sceStrTab + elf->dynamics[i].value;
+			elf->soName = name;
 			break;
 
 		case orbisElfDynamicTypeSceImportLib:
 			elf->importLibraries[importLibraryIndex].id = elf->dynamics[i].value >> 48;
 			elf->importLibraries[importLibraryIndex].version = (elf->dynamics[i].value >> 32) & 0xffff;
-			elf->importLibraries[importLibraryIndex].name = elf->sceStrTab + (elf->dynamics[i].value & 0xffffffff);
+			elf->importLibraries[importLibraryIndex].name = name;
 			importLibraryIndex++;
 			break;
 
 		case orbisElfDynamicTypeSceExportLib:
 			elf->exportLibraries[exportLibraryIndex].id = elf->dynamics[i].value >> 48;
 			elf->exportLibraries[exportLibraryIndex].version = (elf->dynamics[i].value >> 32) & 0xffff;
-			elf->exportLibraries[exportLibraryIndex].name = elf->sceStrTab + (elf->dynamics[i].value & 0xffffffff);
+			elf->exportLibraries[exportLibraryIndex].name = name;
 			exportLibraryIndex++;
 			break;
 
@@ -450,12 +493,17 @@ static OrbisElfErrorCode_t parseDynamicProgram(OrbisElfHandle_t elf)
 			break;
 
 		case orbisElfDynamicTypeSceModuleInfo:
-			elf->moduleInfo.name = elf->sceStrTab + (elf->dynamics[i].value & 0xffffffff);
+			elf->moduleInfo.name = name;
 			break;
 
 		case orbisElfDynamicTypeSceOriginalFilename:
-			printf("orbisElfDynamicTypeSceOriginalFilename value '%s'\n", elf->sceStrTab + (elf->dynamics[i].value & 0xffffffff));
+			elf->originalFileName = name;
 			break;
+
+		case orbisElfDynamicTypeNeeded:
+			elf->needed[neededIndex++] = name;
+			break;
+
 
 		default:
 			break;
@@ -563,6 +611,7 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 {
 	int rebaseCount = 0;
 	int importsCount = 0;
+	int tlsCount = 0;
 
 	for (uint64_t i = 0, count = elf->sceRelaSize / elf->sceRelaEntSize; i < count; ++i)
 	{
@@ -574,15 +623,34 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 			continue;
 		}
 
-		const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
-
-		if (relType == orbisElfRelocationTypeRelative)
+		switch (relType)
 		{
+		case orbisElfRelocationTypeRelative:
+			assert(elf->sceRela[i].addend);
 			++rebaseCount;
-		}
-		else
-		{
+			break;
+
+		case orbisElfRelocationTypeDtpMod64:
+		case orbisElfRelocationTypeTpOff64:
+		case orbisElfRelocationTypeTpOff32:
+			++tlsCount;
+			break;
+
+		case orbisElfRelocationType64:
+			if (orbisElfGetSymbol(elf, symbolIndex)->header.value)
+			{
+				++rebaseCount;
+			}
+			else
+			{
+				++importsCount;
+			}
+			break;
+
+		default:
+			assert(orbisElfGetSymbol(elf, symbolIndex)->header.value == 0);
 			++importsCount;
+			break;
 		}
 	}
 
@@ -590,9 +658,9 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 	{
 	case orbisElfDynamicTypeRela:
 	{
-		const OrbisElfRelocationWithAddend_t *rela = (OrbisElfRelocationWithAddend_t *)elf->sceJmpRel;
+		const OrbisElfRela_t *rela = (OrbisElfRela_t *)elf->sceJmpRel;
 
-		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocationWithAddend_t); i < count; ++i)
+		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRela_t); i < count; ++i)
 		{
 			if ((rela[i].info & 0xffffffff) != orbisElfRelocationTypeJumpSlot)
 			{
@@ -600,9 +668,7 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 				continue;
 			}
 
-			const OrbisElfSymbol_t *sym = elf->symbols + (rela[i].info >> 32);
-
-			if (!sym->header.value)
+			if (!orbisElfGetSymbol(elf, rela[i].info >> 32)->header.value)
 			{
 				++importsCount;
 			}
@@ -616,9 +682,9 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 
 	case orbisElfDynamicTypeRel:
 	{
-		const OrbisElfRelocation_t *rel = (OrbisElfRelocation_t *)elf->sceJmpRel;
+		const OrbisElfRel_t *rel = (OrbisElfRel_t *)elf->sceJmpRel;
 
-		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocation_t); i < count; ++i)
+		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRel_t); i < count; ++i)
 		{
 			if ((rel[i].info & 0xffffffff) != orbisElfRelocationTypeJumpSlot)
 			{
@@ -626,48 +692,13 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 				continue;
 			}
 
-			const OrbisElfSymbol_t *sym = elf->symbols + (rel[i].info >> 32);
-
-			if (!sym->header.value)
+			if (!orbisElfGetSymbol(elf, rel[i].info >> 32)->header.value)
 			{
 				++importsCount;
 			}
 			else
 			{
 				++rebaseCount;
-			}
-		}
-
-		elf->rebasesCount = rebaseCount;
-		elf->rebases = malloc(sizeof(OrbisElfRebase_t) * elf->rebasesCount);
-
-		elf->importsCount = importsCount;
-		elf->imports = malloc(sizeof(OrbisElfImport_t) * elf->importsCount);
-
-		OrbisElfRebase_t *rebaseIt = elf->rebases;
-		OrbisElfImport_t *importIt = elf->imports;
-
-		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocation_t); i < count; ++i)
-		{
-			uint32_t symbolIndex = rel[i].info >> 32;
-			const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
-
-			if (!sym->header.value)
-			{
-				importIt->offset = rel[i].offset;
-				importIt->symbolIndex = symbolIndex;
-				importIt->relType = rel[i].info & 0xffffffff;
-				importIt->addend = 0;
-
-				++importIt;
-			}
-			else
-			{
-				rebaseIt->offset = rel[i].offset;
-				rebaseIt->value = sym->header.value;
-				rebaseIt->symbolIndex = symbolIndex;
-
-				++rebaseIt;
 			}
 		}
 		break;
@@ -677,14 +708,18 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 		assert(0);
 	}
 
-	elf->rebasesCount = rebaseCount;
-	elf->rebases = malloc(sizeof(OrbisElfRebase_t) * elf->rebasesCount);
+	elf->rebaseRelocationsCount = rebaseCount;
+	elf->rebaseRelocations = malloc(sizeof(OrbisElfRebaseRelocation_t) * elf->rebaseRelocationsCount);
 
-	elf->importsCount = importsCount;
-	elf->imports = malloc(sizeof(OrbisElfImport_t) * elf->importsCount);
+	elf->importRelocationsCount = importsCount;
+	elf->importRelocations = malloc(sizeof(OrbisElfRelocation_t) * elf->importRelocationsCount);
 
-	OrbisElfRebase_t *rebaseIt = elf->rebases;
-	OrbisElfImport_t *importIt = elf->imports;
+	elf->tlsRelocationsCount = tlsCount;
+	elf->tlsRelocations = malloc(sizeof(OrbisElfRelocation_t) * elf->tlsRelocationsCount);
+
+	OrbisElfRebaseRelocation_t *rebaseIt = elf->rebaseRelocations;
+	OrbisElfRelocation_t *importIt = elf->importRelocations;
+	OrbisElfRelocation_t *tlsIt = elf->tlsRelocations;
 
 	for (uint64_t i = 0, count = elf->sceRelaSize / elf->sceRelaEntSize; i < count; ++i)
 	{
@@ -696,24 +731,58 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 			continue;
 		}
 
-		const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
+		const OrbisElfSymbol_t *sym = orbisElfGetSymbol(elf, symbolIndex);
 
-		if (relType == orbisElfRelocationTypeRelative)
+
+		switch (relType)
 		{
+		case orbisElfRelocationTypeRelative:
 			rebaseIt->offset = elf->sceRela[i].offset;
 			rebaseIt->value = elf->sceRela[i].addend;
 			rebaseIt->symbolIndex = symbolIndex;
 
 			++rebaseIt;
-		}
-		else
-		{
+			break;
+
+		case orbisElfRelocationTypeDtpMod64:
+		case orbisElfRelocationTypeTpOff64:
+		case orbisElfRelocationTypeTpOff32:
+			tlsIt->offset = elf->sceRela[i].offset;
+			tlsIt->symbolIndex = symbolIndex;
+			tlsIt->relType = relType;
+			tlsIt->addend = elf->sceRela[i].addend;
+
+			++tlsIt;
+			break;
+
+		case orbisElfRelocationType64:
+			if (sym->header.value)
+			{
+				rebaseIt->offset = elf->sceRela[i].offset;
+				rebaseIt->value = sym->header.value;
+				rebaseIt->symbolIndex = symbolIndex;
+
+				++rebaseIt;
+			}
+			else
+			{
+				importIt->offset = elf->sceRela[i].offset;
+				importIt->symbolIndex = symbolIndex;
+				importIt->relType = relType;
+				importIt->addend = elf->sceRela[i].addend;
+
+				++importIt;
+			}
+			break;
+
+		default:
 			importIt->offset = elf->sceRela[i].offset;
 			importIt->symbolIndex = symbolIndex;
 			importIt->relType = relType;
 			importIt->addend = elf->sceRela[i].addend;
 
 			++importIt;
+			break;
 		}
 	}
 
@@ -721,14 +790,14 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 	{
 	case orbisElfDynamicTypeRela:
 	{
-		const OrbisElfRelocationWithAddend_t *rela = (OrbisElfRelocationWithAddend_t *)elf->sceJmpRel;
+		const OrbisElfRela_t *rela = (OrbisElfRela_t *)elf->sceJmpRel;
 
-		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocationWithAddend_t); i < count; ++i)
+		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRela_t); i < count; ++i)
 		{
 			uint32_t symbolIndex = rela[i].info >> 32;
 			const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
 
-			if (!sym->header.value)
+			if (!orbisElfGetSymbol(elf, symbolIndex)->header.value)
 			{
 				importIt->offset = rela[i].offset;
 				importIt->symbolIndex = symbolIndex;
@@ -751,14 +820,14 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 
 	case orbisElfDynamicTypeRel:
 	{
-		const OrbisElfRelocation_t *rel = (OrbisElfRelocation_t *)elf->sceJmpRel;
+		const OrbisElfRel_t *rel = (OrbisElfRel_t *)elf->sceJmpRel;
 
-		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRelocation_t); i < count; ++i)
+		for (uint64_t i = 0, count = elf->scePltRelSize / sizeof(OrbisElfRel_t); i < count; ++i)
 		{
 			uint32_t symbolIndex = rel[i].info >> 32;
 			const OrbisElfSymbol_t *sym = elf->symbols + symbolIndex;
 
-			if (!sym->header.value)
+			if (!orbisElfGetSymbol(elf, symbolIndex)->header.value)
 			{
 				importIt->offset = rel[i].offset;
 				importIt->symbolIndex = symbolIndex;
@@ -778,14 +847,26 @@ static OrbisElfErrorCode_t parseRelocations(OrbisElfHandle_t elf)
 		}
 		break;
 	}
+
+	default:
+		break;
 	}
 
 	return orbisElfErrorCodeOk;
 }
 
-OrbisElfErrorCode_t orbisElfValidate(const void *image, size_t size, OrbisElfType_t expectedType)
+OrbisElfErrorCode_t orbisElfValidate(const void *image, size_t imageSize, OrbisElfType_t expectedType);
+OrbisElfErrorCode_t orbisElfParse(OrbisElfHandle_t *handle, OrbisElfReadCallback_t readImageCallback, size_t imageSize, void *readImageUserData);
+OrbisElfErrorCode_t orbisElfLoad(OrbisElfHandle_t elf, void *baseAddress, uint64_t virtualBaseAddress);
+
+OrbisElfErrorCode_t orbisElfValidate(const void *image, size_t imageSize, OrbisElfType_t expectedType)
 {
-	const OrbisElfHeader_t *header = image;
+	if (imageSize < sizeof(OrbisElfHeader_t))
+	{
+		return orbisElfErrorCodeInvalidImageFormat;
+	}
+
+	OrbisElfHeader_t *header = (OrbisElfHeader_t *)image;
 
 	if (header->magic[0] != 0x7f || header->magic[1] != 'E' || header->magic[2] != 'L' || header->magic[3] != 'F')
 	{
@@ -815,25 +896,34 @@ OrbisElfErrorCode_t orbisElfValidate(const void *image, size_t size, OrbisElfTyp
 	return orbisElfErrorCodeOk;
 }
 
-OrbisElfErrorCode_t orbisElfParse(const void *image, size_t size, OrbisElfHandle_t *handle)
+OrbisElfErrorCode_t orbisElfParse(OrbisElfHandle_t *handle, OrbisElfReadCallback_t readImageCallback, size_t imageSize, void *readImageUserData)
 {
-	OrbisElfErrorCode_t errorCode = orbisElfValidate(image, size, orbisElfTypeNone);
+	OrbisElfErrorCode_t errorCode;
 
-	if (errorCode != orbisElfErrorCodeOk)
+	if (imageSize < sizeof(OrbisElfHeader_t))
 	{
-		return errorCode;
+		return orbisElfErrorCodeInvalidImageFormat;
 	}
 
 	OrbisElfHandle_t elf = malloc(sizeof(OrbisElf_t));
-
+		
 	if (!elf)
 	{
 		return orbisElfErrorCodeNoMemory;
 	}
-
+		
 	memset(elf, 0, sizeof(OrbisElf_t));
-	elf->image = image;
-	elf->header = *(const OrbisElfHeader_t *)image;
+	elf->read = readImageCallback;
+	elf->readUserData = readImageUserData;
+	elf->imageSize = imageSize;
+	
+	if (orbisElfRead(elf, 0, &elf->header, sizeof(OrbisElfHeader_t)) != sizeof(OrbisElfHeader_t))
+	{
+		orbisElfDestroy(elf);
+		return orbisElfErrorCodeIoError;
+	}
+	
+	*handle = elf;
 
 	int isOk = 1;
 	isOk = isOk && (errorCode = parsePrograms(elf)) == orbisElfErrorCodeOk;
@@ -841,15 +931,8 @@ OrbisElfErrorCode_t orbisElfParse(const void *image, size_t size, OrbisElfHandle
 	isOk = isOk && (errorCode = parseDynamicProgram(elf)) == orbisElfErrorCodeOk;
 	isOk = isOk && (errorCode = parseSymbols(elf)) == orbisElfErrorCodeOk;
 	isOk = isOk && (errorCode = parseRelocations(elf)) == orbisElfErrorCodeOk;
-
-	if (!isOk)
-	{
-		orbisElfDestroy(elf);
-		return errorCode;
-	}
-
-	*handle = elf;
-	return orbisElfErrorCodeOk;
+	
+	return isOk ? orbisElfErrorCodeOk : errorCode;
 }
 
 OrbisElfErrorCode_t orbisElfLoad(OrbisElfHandle_t elf, void *baseAddress, uint64_t virtualBaseAddress)
@@ -859,27 +942,126 @@ OrbisElfErrorCode_t orbisElfLoad(OrbisElfHandle_t elf, void *baseAddress, uint64
 
 	for (uint64_t i = 0; i < elf->symbolsCount; ++i)
 	{
-		elf->symbols[i].baseAddress = elf->baseAddress;
 		elf->symbols[i].virtualBaseAddress = elf->virtualBaseAddress;
 	}
 
 	for (uint16_t i = 0; i < elf->programsCount; ++i)
 	{
-		if (elf->programs[i].header.type == orbisElfProgramTypeLoad || elf->programs[i].header.type == orbisElfProgramTypeSceRelRo)
+		if (elf->programs[i].type == orbisElfProgramTypeLoad || elf->programs[i].type == orbisElfProgramTypeSceRelRo)
 		{
-			memcpy((char *)baseAddress + elf->programs[i].header.vaddr, (const char *)elf->image + elf->programs[i].header.offset, elf->programs[i].header.filesz);
+			if (elf->programs[i].offset + elf->programs[i].filesz > elf->imageSize)
+			{
+				return orbisElfErrorCodeCorruptedImage;
+			}
+			
+			if (orbisElfRead(elf, elf->programs[i].offset, (char *)baseAddress + elf->programs[i].vaddr, elf->programs[i].filesz)
+			    != elf->programs[i].filesz)
+			{
+				return orbisElfErrorCodeIoError;
+			}
 		}
 	}
 
 	return orbisElfErrorCodeOk;
 }
 
-OrbisElfErrorCode_t orbisElfInitializeTls(OrbisElfHandle_t elf, void *tls)
+OrbisElfErrorCode_t orbisElfImportModule(OrbisElfHandle_t elf, OrbisElfHandle_t importElf)
 {
-	memcpy(tls, (void *)((char *)elf->baseAddress + elf->tlsInitAddress), elf->tlsInitSize);
-	memset((char *)tls + elf->tlsInitSize, 0, elf->tlsSize - elf->tlsInitSize);
+	for (uint64_t importSymbolIndex = 0; importSymbolIndex < elf->symbolsCount; ++importSymbolIndex)
+	{
+		if (!elf->symbols[importSymbolIndex].module || !elf->symbols[importSymbolIndex].library)
+		{
+			continue;
+		}
+
+		if (elf->symbols[importSymbolIndex].type == orbisElfSymbolBindLocal)
+		{
+			continue;
+		}
+
+		if (elf->symbols[importSymbolIndex].header.value && elf->symbols[importSymbolIndex].type != orbisElfSymbolBindWeak)
+		{
+			continue;
+		}
+
+		if (strcmp(elf->symbols[importSymbolIndex].module->name, importElf->moduleInfo.name) != 0)
+		{
+			continue;
+		}
+
+		for (uint64_t exportSymbolIndex = 0; exportSymbolIndex < importElf->symbolsCount; ++exportSymbolIndex)
+		{
+			if (!importElf->symbols[exportSymbolIndex].library || !importElf->symbols[exportSymbolIndex].header.value)
+			{
+				continue;
+			}
+
+			if (importElf->symbols[exportSymbolIndex].type == orbisElfSymbolBindLocal)
+			{
+				continue;
+			}
+
+			if (elf->symbols[importSymbolIndex].header.value && importElf->symbols[exportSymbolIndex].type != orbisElfSymbolBindGlobal)
+			{
+				continue;
+			}
+
+			if (elf->symbols[importSymbolIndex].type != importElf->symbols[exportSymbolIndex].type)
+			{
+				continue;
+			}
+
+			if (strcmp(elf->symbols[importSymbolIndex].library->name, importElf->symbols[exportSymbolIndex].library->name) != 0)
+			{
+				continue;
+			}
+
+			if (strcmp(elf->symbols[importSymbolIndex].name, importElf->symbols[exportSymbolIndex].name) != 0)
+			{
+				continue;
+			}
+
+			elf->symbols[importSymbolIndex].header.value = importElf->symbols[exportSymbolIndex].header.value;
+			elf->symbols[importSymbolIndex].header.size = importElf->symbols[exportSymbolIndex].header.size;
+			elf->symbols[importSymbolIndex].virtualBaseAddress = importElf->virtualBaseAddress;
+			break;
+		}
+	}
 
 	return orbisElfErrorCodeOk;
+}
+
+OrbisElfErrorCode_t orbisElfSetImportSymbol(OrbisElfHandle_t elf, const char *moduleName, const char *libraryName, const char *symbolName, uint64_t virtualBaseAddress, uint64_t value, uint64_t size)
+{
+	for (uint64_t importSymbolIndex = 0; importSymbolIndex < elf->symbolsCount; ++importSymbolIndex)
+	{
+		if (!elf->symbols[importSymbolIndex].module || !elf->symbols[importSymbolIndex].library)
+		{
+			continue;
+		}
+
+		if (strcmp(elf->symbols[importSymbolIndex].module->name, moduleName) != 0)
+		{
+			continue;
+		}
+
+		if (strcmp(elf->symbols[importSymbolIndex].library->name, libraryName) != 0)
+		{
+			continue;
+		}
+
+		if (strcmp(elf->symbols[importSymbolIndex].name, symbolName) != 0)
+		{
+			continue;
+		}
+
+		elf->symbols[importSymbolIndex].header.value = value;
+		elf->symbols[importSymbolIndex].header.size = size;
+		elf->symbols[importSymbolIndex].virtualBaseAddress = virtualBaseAddress;
+		return orbisElfErrorCodeOk;
+	}
+
+	return orbisElfErrorCodeNotFound;
 }
 
 void orbisElfDestroy(OrbisElfHandle_t elf)
@@ -898,9 +1080,12 @@ void orbisElfDestroy(OrbisElfHandle_t elf)
 		}
 	}
 
+	free((void *)elf->dynamics);
 	free(elf->symbols);
-	free(elf->imports);
-	free(elf->rebases);
+	free(elf->importRelocations);
+	free(elf->rebaseRelocations);
+	free(elf->tlsRelocations);
+	free((void *)elf->needed);
 	free(elf);
 }
 
@@ -934,21 +1119,6 @@ uint64_t orbisElfGetTlsAlign(OrbisElfHandle_t elf)
 	return elf->tlsAlign;
 }
 
-uint64_t orbisElfGetTlsIndex(OrbisElfHandle_t elf)
-{
-	return elf->tlsIndex;
-}
-
-void orbisElfSetTlsIndex(OrbisElfHandle_t elf, uint64_t index)
-{
-	elf->tlsIndex = index;
-}
-
-uint64_t orbisElfGetTlsOffset(OrbisElfHandle_t elf)
-{
-	return elf->tlsOffset;
-}
-
 uint64_t orbisElfGetTlsInitAddress(OrbisElfHandle_t elf)
 {
 	return elf->tlsInitAddress;
@@ -957,11 +1127,6 @@ uint64_t orbisElfGetTlsInitAddress(OrbisElfHandle_t elf)
 uint64_t orbisElfGetTlsInitSize(OrbisElfHandle_t elf)
 {
 	return elf->tlsInitSize;
-}
-
-void orbisElfSetTlsOffset(OrbisElfHandle_t elf, uint64_t offset)
-{
-	elf->tlsOffset = offset;
 }
 
 uint64_t orbisElfGetLoadSize(OrbisElfHandle_t elf)
@@ -1054,7 +1219,7 @@ uint64_t orbisElfGetInitArray(OrbisElfHandle_t elf, uint64_t *count)
 	return elf->initArrayAddress;
 }
 
-OrbisElfProgramHandle_t orbisElfGetProgram(OrbisElfHandle_t elf, uint16_t index)
+const OrbisElfProgramHeader_t *orbisElfGetProgram(OrbisElfHandle_t elf, uint16_t index)
 {
 	if (index >= elf->programsCount)
 	{
@@ -1064,7 +1229,7 @@ OrbisElfProgramHandle_t orbisElfGetProgram(OrbisElfHandle_t elf, uint16_t index)
 	return elf->programs + index;
 }
 
-OrbisElfSectionHandle_t orbisElfGetSection(OrbisElfHandle_t elf, uint16_t index)
+const OrbisElfSectionHeader_t *orbisElfGetSection(OrbisElfHandle_t elf, uint16_t index)
 {
 	if (index >= elf->sectionsCount)
 	{
@@ -1127,8 +1292,9 @@ const OrbisElfSymbol_t *orbisElfFindSymbolByName(OrbisElfHandle_t elf, const cha
 	return NULL;
 }
 
-OrbisElfSectionHandle_t orbisElfFindSectionByName(OrbisElfHandle_t elf, const char *name)
+const OrbisElfSectionHeader_t *orbisElfFindSectionByName(OrbisElfHandle_t elf, const char *name)
 {
+	/*
 	for (uint16_t i = 0; i < elf->sectionsCount; ++i)
 	{
 		if (strcmp(elf->sections[i].name, name) == 0)
@@ -1136,6 +1302,7 @@ OrbisElfSectionHandle_t orbisElfFindSectionByName(OrbisElfHandle_t elf, const ch
 			return elf->sections + i;
 		}
 	}
+	*/
 
 	return NULL;
 }
@@ -1179,74 +1346,60 @@ const OrbisElfLibraryInfo_t *orbisElfFindLibraryById(OrbisElfHandle_t elf, uint1
 	return NULL;
 }
 
-const OrbisElfProgramHeader_t *orbisElfProgramGetHeader(OrbisElfProgramHandle_t program)
+const char *orbisElfSectionGetName(const OrbisElfSectionHeader_t *section)
 {
-	return program ? &program->header : NULL;
+	return NULL;//section->name;
 }
 
-const void *orbisElfProgramGetData(OrbisElfProgramHandle_t program, uint64_t *size)
+uint64_t orbisElfGetRebaseRelocationsCount(OrbisElfHandle_t elf)
 {
-	if (size)
-	{
-		*size = program->header.filesz;
-	}
-
-	return program->data;
+	return elf->rebaseRelocationsCount;
 }
 
-OrbisElfSectionHeader_t *orbisElfSectionGetHeader(OrbisElfSectionHandle_t section)
+OrbisElfRebaseRelocation_t *orbisElfGetRebaseRelocation(OrbisElfHandle_t elf, uint64_t index)
 {
-	return section ? &section->header : NULL;
-}
-
-const void *orbisElfSectionGetData(OrbisElfSectionHandle_t section, uint64_t *size)
-{
-	if (size)
-	{
-		*size = section->header.size;
-	}
-
-	return section->data;
-}
-
-const char *orbisElfSectionGetName(OrbisElfSectionHandle_t section)
-{
-	return section->name;
-}
-
-uint64_t orbisElfGetRebasesCount(OrbisElfHandle_t elf)
-{
-	return elf->rebasesCount;
-}
-
-OrbisElfRebase_t *orbisElfGetRebase(OrbisElfHandle_t elf, uint64_t index)
-{
-	if (index >= elf->rebasesCount)
+	if (index >= elf->rebaseRelocationsCount)
 	{
 		return NULL;
 	}
 
-	return elf->rebases + index;
+	return elf->rebaseRelocations + index;
 }
 
-uint64_t orbisElfGetImportsCount(OrbisElfHandle_t elf)
+uint64_t orbisElfGetImportRelocationsCount(OrbisElfHandle_t elf)
 {
-	return elf->importsCount;
+	return elf->importRelocationsCount;
 }
 
-OrbisElfImport_t *orbisElfGetImport(OrbisElfHandle_t elf, uint64_t index)
+OrbisElfRelocation_t *orbisElfGetImportRelocation(OrbisElfHandle_t elf, uint64_t index)
 {
-	if (index >= elf->importsCount)
+	if (index >= elf->importRelocationsCount)
 	{
 		return NULL;
 	}
 
-	return elf->imports + index;
+	return elf->importRelocations + index;
 }
 
-uint8_t orbisElfGetImportAddressSize(OrbisElfImport_t *import)
+uint64_t orbisElfGetTlsRelocationsCount(OrbisElfHandle_t elf)
 {
-	switch (import->relType)
+	return elf->tlsRelocationsCount;
+}
+
+OrbisElfRelocation_t *orbisElfGetTlsRelocation(OrbisElfHandle_t elf, uint64_t index)
+{
+	if (index >= elf->tlsRelocationsCount)
+	{
+		return NULL;
+	}
+
+	return elf->tlsRelocations + index;
+}
+
+
+uint8_t orbisElfGetRelocationAddressSize(OrbisElfRelocation_t *rel)
+{
+	switch (rel->relType)
 	{
 	case orbisElfRelocationTypePc32:
 	case orbisElfRelocationTypeTpOff32:
@@ -1258,58 +1411,107 @@ uint8_t orbisElfGetImportAddressSize(OrbisElfImport_t *import)
 	}
 }
 
-uint64_t orbisElfGetImportValue(OrbisElfImport_t *import, OrbisElfHandle_t elf)
+uint64_t orbisElfGetImportRelocationValue(OrbisElfHandle_t elf, OrbisElfRelocation_t *rel)
 {
-	const OrbisElfSymbol_t *sym = elf->symbols + import->symbolIndex;
+	const OrbisElfSymbol_t *sym = orbisElfGetSymbol(elf, rel->symbolIndex);
 
-	switch (import->relType)
+	switch (rel->relType)
 	{
+	case orbisElfRelocationTypeJumpSlot:
+		if (sym->header.value)
+		{
+			return sym->virtualBaseAddress + sym->header.value + rel->addend;
+		}
+
+		return sym->virtualBaseAddress;
+
 	case orbisElfRelocationType64:
-		return sym->header.value + import->addend;
+		return sym->virtualBaseAddress + sym->header.value + rel->addend;
 
 	case orbisElfRelocationTypePc32:
-		return (uint32_t)(sym->header.value + import->addend - (elf->virtualBaseAddress + import->offset));
+		return (uint32_t)(sym->virtualBaseAddress + sym->header.value + rel->addend - (elf->virtualBaseAddress + rel->offset));
 
 	case orbisElfRelocationTypeCopy:
 		fprintf(stderr, "%s: Unexpected R_X86_64_COPY relocation in shared library\n", elf->moduleInfo.name);
 		return 0;
 
 	case orbisElfRelocationTypeGlobDat:
-		return sym->header.value;
-
-	case orbisElfRelocationTypeDtpMod64:
-		return elf->tlsIndex;
+		return sym->virtualBaseAddress + sym->header.value;
 
 	case orbisElfRelocationTypeDtpOff64:
-		return sym->header.value + import->addend;
-
-	case orbisElfRelocationTypeTpOff64:
-		return sym->header.value - elf->tlsOffset + import->addend;
+		return sym->header.value + rel->addend;
 
 	case orbisElfRelocationTypeDtpOff32:
-		return (uint32_t)(sym->header.value + import->addend);
-
-	case orbisElfRelocationTypeTpOff32:
-		return (uint32_t)(sym->header.value - elf->tlsOffset + import->addend);
+		return (uint32_t)(sym->header.value + rel->addend);
 
 	default:
-		fprintf(stderr, "%s: Unsupported relocation type %u in non-PLT relocations\n", elf->moduleInfo.name, import->relType);
+		fprintf(stderr, "%s: Unsupported relocation type %u in imports relocations\n", elf->moduleInfo.name, rel->relType);
 		return 0;
 	}
 }
 
-OrbisElfImportInjectType_t orbisElfGetImportInjectType(OrbisElfImport_t *import)
+uint64_t orbisElfGetTlsRelocationValue(OrbisElfHandle_t elf, OrbisElfRelocation_t *rel, uint64_t tlsIndex, uint64_t tlsOffset)
 {
-	switch (import->relType)
+	switch (rel->relType)
+	{
+	case orbisElfRelocationTypeDtpMod64:
+		return tlsIndex;
+
+	case orbisElfRelocationTypeTpOff64:
+		return orbisElfGetSymbol(elf, rel->symbolIndex)->header.value - tlsOffset + rel->addend;
+
+	case orbisElfRelocationTypeTpOff32:
+		return (uint32_t)(orbisElfGetSymbol(elf, rel->symbolIndex)->header.value - tlsOffset + rel->addend);
+
+	default:
+		fprintf(stderr, "%s: Unsupported relocation type %u in TLS relocations\n", elf->moduleInfo.name, rel->relType);
+		return 0;
+	}
+}
+
+
+uint64_t orbisElfGetRelocationOffset(OrbisElfRelocation_t *rel)
+{
+	return rel->offset;
+}
+
+OrbisElfRelocationInjectType_t orbisElfGetRelocationInjectType(OrbisElfRelocation_t *rel)
+{
+	switch (rel->relType)
 	{
 	case orbisElfRelocationTypeDtpMod64:
 	case orbisElfRelocationTypeDtpOff64:
 	case orbisElfRelocationTypeTpOff64:
 	case orbisElfRelocationTypeDtpOff32:
 	case orbisElfRelocationTypeTpOff32:
-		return orbisElfImportInjectTypeAdd;
+		return orbisElfRelocationInjectTypeAdd;
 
 	default:
-		return orbisElfImportInjectTypeSet;
+		return orbisElfRelocationInjectTypeSet;
 	}
+}
+
+const OrbisElfDynamic_t *orbisElfGetDynamics(OrbisElfHandle_t elf, uint64_t *count)
+{
+	if (count)
+	{
+		*count = elf->dynamicsCount;
+	}
+
+	return elf->dynamics;
+}
+
+const char **orbisElfGetNeeded(OrbisElfHandle_t elf, uint64_t *count)
+{
+	if (count)
+	{
+		*count = elf->neededCount;
+	}
+
+	return elf->needed;
+}
+
+uint64_t orbisElfRead(OrbisElfHandle_t elf, uint64_t offset, void *destination, uint64_t size)
+{
+	return elf->read(offset, destination, size, elf->readUserData);
 }

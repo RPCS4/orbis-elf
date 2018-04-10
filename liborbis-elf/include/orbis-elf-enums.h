@@ -8,6 +8,8 @@ typedef enum OrbisElfErrorCode_t
 	orbisElfErrorCodeInvalidImageFormat,
 	orbisElfErrorCodeInvalidValue,
 	orbisElfErrorCodeNotFound,
+	orbisElfErrorCodeIoError,
+	orbisElfErrorCodeCorruptedImage
 } OrbisElfErrorCode_t;
 
 typedef enum OrbisElfType_t
@@ -35,6 +37,7 @@ typedef enum OrbisElfProgramType_t
 	orbisElfProgramTypeSceDynlibData = 0x61000000,
 	orbisElfProgramTypeSceProcParam = 0x61000001,
 	orbisElfProgramTypeSceRelRo = 0x61000010,
+	orbisElfProgramTypeGnuEhFrame = 0x6474e550,
 	orbisElfProgramTypeSceComment = 0x6fffff00,
 	orbisElfProgramTypeSceVersion = 0x6fffff01,
 } OrbisElfProgramType_t;
@@ -133,11 +136,11 @@ typedef enum OrbisElfSymbolBind_t
 	orbisElfSymbolBindWeak = 2
 } OrbisElfSymbolBind_t;
 
-typedef enum OrbisElfImportInjectType_t
+typedef enum OrbisElfRelocationInjectType_t
 {
-	orbisElfImportInjectTypeSet,
-	orbisElfImportInjectTypeAdd
-} OrbisElfImportInjectType_t;
+	orbisElfRelocationInjectTypeSet,
+	orbisElfRelocationInjectTypeAdd
+} OrbisElfRelocationInjectType_t;
 
 typedef enum OrbisElfRelocationType_t
 {

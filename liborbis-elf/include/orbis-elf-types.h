@@ -4,8 +4,7 @@
 #include <stdint.h>
 
 typedef struct OrbisElf_s *OrbisElfHandle_t;
-typedef struct OrbisElfProgram_s *OrbisElfProgramHandle_t;
-typedef struct OrbisElfSection_s *OrbisElfSectionHandle_t;
+typedef uint64_t (*OrbisElfReadCallback_t)(uint64_t offset, void *destination, uint64_t size, void *readUserDada);
 
 typedef struct
 {
@@ -71,14 +70,14 @@ typedef struct
 {
 	uint64_t offset;
 	uint64_t info;
-} OrbisElfRelocation_t;
+} OrbisElfRel_t;
 
 typedef struct
 {
 	uint64_t offset;
 	uint64_t info;
 	int64_t addend;
-} OrbisElfRelocationWithAddend_t;
+} OrbisElfRela_t;
 
 typedef struct
 {
@@ -109,25 +108,24 @@ typedef struct OrbisElfSymbol_s
 	const char *name;
 	const OrbisElfModuleInfo_t *module;
 	const OrbisElfLibraryInfo_t *library;
-	enum OrbisElfSymbolBind_t bind;
-	enum OrbisElfSymbolType_t type;
+	int bind; /* see OrbisElfSymbolBind_t*/
+	int type; /* see OrbisElfSymbolType_t */
 	uint64_t virtualBaseAddress;
-	void *baseAddress;
 } OrbisElfSymbol_t;
 
-typedef struct OrbisElfImport_s
+typedef struct OrbisElfRelocation_s
 {
 	uint64_t offset;
 	int64_t addend;
 	uint32_t symbolIndex;
 	uint32_t relType; /* see OrbisElfRelocationType_t */
-} OrbisElfImport_t;
+} OrbisElfRelocation_t;
 
 typedef struct OrbisElfRebase_s
 {
 	uint64_t offset;
 	uint64_t value;
 	uint32_t symbolIndex;
-} OrbisElfRebase_t;
+} OrbisElfRebaseRelocation_t;
 
 #endif /* _ORBIS_ELF_TYPES_H_ */

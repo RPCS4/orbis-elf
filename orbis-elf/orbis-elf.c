@@ -4,12 +4,10 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <inttypes.h>
-#include <string.h>
 
 #ifdef _WIN32
 	#define stat64 _stat64
 #endif
-
 const char *orbisElfErrorCodeToString(OrbisElfErrorCode_t error)
 {
 	switch (error)
@@ -19,6 +17,8 @@ const char *orbisElfErrorCodeToString(OrbisElfErrorCode_t error)
 	case orbisElfErrorCodeInvalidImageFormat: return "Invalid image format";
 	case orbisElfErrorCodeInvalidValue: return "Invalid value";
 	case orbisElfErrorCodeNotFound: return "Not found";
+	case orbisElfErrorCodeIoError: return "IO error";
+	case orbisElfErrorCodeCorruptedImage: return "Corrupted image";
 
 	default:
 		break;
@@ -162,6 +162,12 @@ static void usage(const char *program)
 	printf("        -m - Dump import modules\n");
 }
 
+static size_t imageRead(uint64_t offset, void *destination, uint64_t size, FILE *file)
+{
+	fseek(file, offset, SEEK_SET);
+	return fread(destination, 1, size, file);
+}
+
 int main(int argc, const char *argv[])
 {
 	if (argc < 2)
@@ -217,8 +223,8 @@ int main(int argc, const char *argv[])
 		return 1;
 	}
 
-	struct stat64 fileStat;
-	if (stat64(pathToElf, &fileStat) != 0)
+	struct stat fileStat;
+	if (stat(pathToElf, &fileStat) != 0)
 	{
 		fprintf(stderr, "File '%s' not found\n", pathToElf);
 		return 1;
@@ -232,23 +238,12 @@ int main(int argc, const char *argv[])
 		return 1;
 	}
 
-	void *elfData = malloc(fileStat.st_size);
-
-	if (fread(elfData, 1, fileStat.st_size, file) != fileStat.st_size)
-	{
-		fprintf(stderr, "File '%s' reading error\n", pathToElf);
-		free(elfData);
-
-		return 1;
-	}
-
 	OrbisElfHandle_t elf;
-	OrbisElfErrorCode_t errorCode = orbisElfParse(elfData, fileStat.st_size, &elf);
+	OrbisElfErrorCode_t errorCode = orbisElfParse(&elf, (OrbisElfReadCallback_t)imageRead, fileStat.st_size, file);
 
 	if (errorCode != orbisElfErrorCodeOk)
 	{
 		fprintf(stderr, "File '%s' parsing error: %s\n", pathToElf, orbisElfErrorCodeToString(errorCode));
-		free(elfData);
 		return 0;
 	}
 
@@ -277,7 +272,7 @@ int main(int argc, const char *argv[])
 
 				for (uint16_t i = 0; i < programsCount; ++i)
 				{
-					const OrbisElfProgramHeader_t *programHeader = orbisElfProgramGetHeader(orbisElfGetProgram(elf, i));
+					const OrbisElfProgramHeader_t *programHeader = orbisElfGetProgram(elf, i);
 
 					printf("%-3u  ", i);
 
@@ -294,7 +289,7 @@ int main(int argc, const char *argv[])
 							needFreeProgramType = 1;
 						}
 
-						printf("% 16s   %-8" PRIx32 "   %-16" PRIx64 "   %-16" PRIx64 "   %-16" PRIx64 "   %-16" PRIx64 "    %-16" PRIx64 "   %-16" PRIx64,
+						printf("%16s   %-8" PRIx32 "   %-16" PRIx64 "   %-16" PRIx64 "   %-16" PRIx64 "   %-16" PRIx64 "    %-16" PRIx64 "   %-16" PRIx64,
 							programType,
 							programHeader->flags,
 							programHeader->offset,
@@ -326,20 +321,17 @@ int main(int argc, const char *argv[])
 	if (config & configDumpSections)
 	{
 		uint16_t sectionsCount = orbisElfGetSectionsCount(elf);
-		if (sectionsCount == orbisElfErrorCodeOk)
+		printf("ELF contains %" PRIu16 " sections\n\n", sectionsCount);
+
+		if (sectionsCount)
 		{
-			printf("ELF contains %" PRIu16 " sections\n\n", sectionsCount);
-
-			if (sectionsCount)
+			for (uint16_t i = 0; i < sectionsCount; ++i)
 			{
-				for (uint16_t i = 0; i < sectionsCount; ++i)
-				{
-					OrbisElfSectionHandle_t section = orbisElfGetSection(elf, i);
-					printf("%-3u  %s\n", i, orbisElfSectionGetName(section));
-				}
-
-				printf("\n");
+				const OrbisElfSectionHeader_t *section = orbisElfGetSection(elf, i);
+				printf("%-3u  %s\n", i, orbisElfSectionGetName(section));
 			}
+
+			printf("\n");
 		}
 	}
 
@@ -433,7 +425,7 @@ int main(int argc, const char *argv[])
 
 	if (config & configDumpTlsInfo)
 	{
-		printf("TLS offset: 0x%" PRIx64 "\n", orbisElfGetTlsOffset(elf));
+		//printf("TLS offset: 0x%" PRIx64 "\n", orbisElfGetTlsOffset(elf));
 		printf("TLS size: 0x%" PRIx64 "\n", orbisElfGetTlsSize(elf));
 		printf("TLS align: 0x%" PRIx64 "\n", orbisElfGetTlsAlign(elf));
 		printf("TLS init address: 0x%" PRIx64 "\n", orbisElfGetTlsInitAddress(elf));
@@ -441,6 +433,5 @@ int main(int argc, const char *argv[])
 	}
 
 	orbisElfDestroy(elf);
-	free(elfData);
 	return 0;
 }
